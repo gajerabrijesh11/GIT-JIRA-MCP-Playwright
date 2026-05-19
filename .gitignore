@@ -1,8 +1,26 @@
 
 # Playwright
-node_modules/
-/test-results/
-/playwright-report/
+
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+
+# Dependencies
+node_modules/
+
+# Playwright
+playwright-report/
+test-results/
+
+# Allure
+allure-results/
+allure-report/
+
+# Environment secrets - NEVER commit these!
+.env
+.env.local
+claude_desktop_config.json
+
+# OS files
+.DS_Store
+Thumbs.db
