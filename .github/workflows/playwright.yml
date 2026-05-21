@@ -1,27 +1,225 @@
-name: Playwright Tests
+name: Test Pipeline → Allure Report → Gmail Notify
+
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, develop ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, develop ]
+
+# Required for GitHub Pages deployment
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
 jobs:
-  test:
-    timeout-minutes: 60
+  test-and-report:
     runs-on: ubuntu-latest
+
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
-      with:
-        node-version: lts/*
-    - name: Install dependencies
-      run: npm ci
-    - name: Install Playwright Browsers
-      run: npx playwright install --with-deps
-    - name: Run Playwright tests
-      run: npx playwright test
-    - uses: actions/upload-artifact@v4
-      if: ${{ !cancelled() }}
-      with:
-        name: playwright-report
-        path: playwright-report/
-        retention-days: 30
+
+      # ─────────────────────────────────────────
+      # STEP 1 — Checkout your code
+      # ─────────────────────────────────────────
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      # ─────────────────────────────────────────
+      # STEP 2 — Set up Python
+      # 👇 Change this block if you use Node/Java
+      # ─────────────────────────────────────────
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ─────────────────────────────────────────
+      # STEP 3 — Install project dependencies
+      # ─────────────────────────────────────────
+      - name: 📦 Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install allure-pytest          # ← allure adapter for pytest
+
+      # ─────────────────────────────────────────
+      # STEP 4 — Install Allure CLI on the runner
+      # ─────────────────────────────────────────
+      - name: ⚙️ Install Allure CLI
+        run: |
+          curl -o allure.tgz -L \
+            https://github.com/allure-framework/allure2/releases/download/2.27.0/allure-2.27.0.tgz
+          tar -zxvf allure.tgz
+          sudo mv allure-2.27.0 /opt/allure
+          sudo ln -s /opt/allure/bin/allure /usr/local/bin/allure
+          allure --version
+
+      # ─────────────────────────────────────────
+      # STEP 5 — Run your tests
+      # continue-on-error: true → report generates
+      # even when some tests fail
+      # ─────────────────────────────────────────
+      - name: 🧪 Run Tests
+        run: |
+          pytest tests/ \
+            --alluredir=allure-results \
+            -v \
+            --tb=short
+        continue-on-error: true
+
+      # ─────────────────────────────────────────
+      # STEP 6 — Generate the Allure HTML report
+      # ─────────────────────────────────────────
+      - name: 📊 Generate Allure Report
+        run: |
+          allure generate allure-results \
+            --clean \
+            -o allure-report
+        if: always()    # run this even if tests failed
+
+      # ─────────────────────────────────────────
+      # STEP 7 — Upload report as artifact
+      # (backup: downloadable from Actions tab)
+      # ─────────────────────────────────────────
+      - name: 💾 Upload Report Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report
+          path: allure-report/
+          retention-days: 30
+        if: always()
+
+      # ─────────────────────────────────────────
+      # STEP 8 — Deploy to GitHub Pages
+      # This gives you a permanent public URL:
+      # https://<your-username>.github.io/<repo-name>/allure-report
+      # ─────────────────────────────────────────
+      - name: 🚀 Deploy Report to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./allure-report
+          destination_dir: allure-report
+        if: always()
+
+      # ─────────────────────────────────────────
+      # STEP 9 — Detect test result for email subject
+      # ─────────────────────────────────────────
+      - name: 🔍 Check Test Outcome
+        id: result
+        run: |
+          if [ -f allure-results/executor.json ]; then
+            echo "status=✅ PASSED" >> $GITHUB_OUTPUT
+          else
+            # fallback: check if any broken/failed xmls exist
+            FAILED=$(find allure-results -name "*.json" | xargs grep -l '"status":"failed"\|"status":"broken"' 2>/dev/null | wc -l)
+            if [ "$FAILED" -gt "0" ]; then
+              echo "status=❌ FAILED" >> $GITHUB_OUTPUT
+            else
+              echo "status=✅ PASSED" >> $GITHUB_OUTPUT
+            fi
+          fi
+        if: always()
+
+      # ─────────────────────────────────────────
+      # STEP 10 — Send Gmail notification
+      # One-click URL opens the Allure report
+      # ─────────────────────────────────────────
+      - name: 📧 Send Gmail Notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}        # sender Gmail address
+          password: ${{ secrets.MAIL_PASSWORD }}        # Gmail App Password (16 chars)
+          to: ${{ secrets.NOTIFY_EMAIL }}               # your personal Gmail to receive
+          from: "GitHub Actions 🤖 <${{ secrets.MAIL_USERNAME }}>"
+          subject: "${{ steps.result.outputs.status }} | ${{ github.repository }} | ${{ github.ref_name }}"
+          html_body: |
+            <!DOCTYPE html>
+            <html>
+            <body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 30px; margin: 0;">
+              <div style="max-width: 600px; margin: auto; background: white; border-radius: 10px;
+                          box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden;">
+
+                <!-- Header -->
+                <div style="background: #1a1a2e; padding: 24px 30px;">
+                  <h2 style="color: white; margin: 0; font-size: 20px;">
+                    🧪 Test Execution Report
+                  </h2>
+                  <p style="color: #aaa; margin: 6px 0 0 0; font-size: 13px;">
+                    GitHub Actions — Automated Notification
+                  </p>
+                </div>
+
+                <!-- Body -->
+                <div style="padding: 28px 30px;">
+                  <table style="width: 100%; border-collapse: collapse; font-size: 14px; color: #333;">
+                    <tr style="border-bottom: 1px solid #eee;">
+                      <td style="padding: 10px 0; color: #888; width: 35%;">Repository</td>
+                      <td style="padding: 10px 0; font-weight: bold;">${{ github.repository }}</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #eee;">
+                      <td style="padding: 10px 0; color: #888;">Branch</td>
+                      <td style="padding: 10px 0; font-weight: bold;">${{ github.ref_name }}</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #eee;">
+                      <td style="padding: 10px 0; color: #888;">Triggered by</td>
+                      <td style="padding: 10px 0; font-weight: bold;">${{ github.actor }}</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #eee;">
+                      <td style="padding: 10px 0; color: #888;">Commit</td>
+                      <td style="padding: 10px 0; font-family: monospace; font-size: 13px;">
+                        ${{ github.sha }}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 10px 0; color: #888;">Run ID</td>
+                      <td style="padding: 10px 0;">#${{ github.run_number }}</td>
+                    </tr>
+                  </table>
+
+                  <!-- One-Click Button -->
+                  <div style="text-align: center; margin: 36px 0 20px 0;">
+                    <a href="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/allure-report/index.html"
+                       style="display: inline-block;
+                              background: linear-gradient(135deg, #4CAF50, #2196F3);
+                              color: white;
+                              padding: 16px 40px;
+                              text-decoration: none;
+                              border-radius: 8px;
+                              font-size: 16px;
+                              font-weight: bold;
+                              letter-spacing: 0.5px;
+                              box-shadow: 0 4px 12px rgba(33,150,243,0.4);">
+                      📊 Open Allure Report
+                    </a>
+                    <p style="font-size: 12px; color: #999; margin-top: 10px;">
+                      Click to open the full interactive report in your browser
+                    </p>
+                  </div>
+
+                  <!-- Fallback URL text -->
+                  <div style="background: #f8f9fa; border-radius: 6px; padding: 12px 16px; margin-top: 10px;">
+                    <p style="font-size: 12px; color: #666; margin: 0;">
+                      Or copy this URL manually:<br/>
+                      <span style="font-family: monospace; color: #333; word-break: break-all;">
+                        https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/allure-report/index.html
+                      </span>
+                    </p>
+                  </div>
+
+                </div>
+
+                <!-- Footer -->
+                <div style="background: #f8f9fa; padding: 16px 30px; border-top: 1px solid #eee;">
+                  <p style="font-size: 12px; color: #aaa; margin: 0; text-align: center;">
+                    Sent by GitHub Actions • ${{ github.repository }}
+                  </p>
+                </div>
+
+              </div>
+            </body>
+            </html>
+        if: always()    # send email even if tests fail

@@ -179,6 +179,6 @@ After every test run you get:
 ## 👨‍💻 Author
 
 **Brijesh Gajera**
-Built as part of AI-powered QA automation learning — Mission: Impress HR 🚀
+Built as part of AI-powered QA automation learning — Mission: Self learning 🚀
 
 ---
