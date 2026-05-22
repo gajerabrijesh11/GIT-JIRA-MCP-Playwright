@@ -173,7 +173,7 @@ After every test run you get:
 | Allure Report | `allure-report/` | Charts, steps, screenshots |
 | Playwright Report | `playwright-report/` | Pass/fail, traces, videos |
 | Screenshots | `test-results/` | Captured on failures |
-
+email notification send after every git action run.
 ---
 
 ## 👨‍💻 Author

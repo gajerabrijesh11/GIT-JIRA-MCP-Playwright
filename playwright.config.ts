@@ -1,22 +1,19 @@
 import { defineConfig, devices } from '@playwright/test';
 
-/**
- * ╔══════════════════════════════════════════════════════════╗
- * ║         Mission Impress HR — Playwright Config           ║
- * ║         Base URL set centrally here — never repeat it    ║
- * ╚══════════════════════════════════════════════════════════╝
- */
+
 export default defineConfig({
+  workers: process.env.CI ? 4 : 2,
+  fullyParallel: true,
   testDir: './tests',
 
   /* Run tests in files in parallel */
-  fullyParallel: true,
+
 
   /* Fail the build on CI if you accidentally left test.only in source */
   forbidOnly: !!process.env.CI,
 
   /* Retry failed tests once on CI */
-  retries: process.env.CI ? 1 : 0,
+  retries: process.env.CI ? 2 : 0,
 
   /* Reporter */
   reporter: [
@@ -53,7 +50,13 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
     // Uncomment below to run cross-browser
-    { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
-    { name: 'webkit',  use: { ...devices['Desktop Safari']  } },
+    {
+      name: 'firefox',
+      use: { ...devices['Desktop Firefox'] }
+    },
+    {
+      name: 'webkit',
+      use: { ...devices['Desktop Safari'] }
+    },
   ],
 });

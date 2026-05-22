@@ -12,40 +12,96 @@ permissions:
   id-token: write
 
 jobs:
-  test-and-report:
+
+  # ═══════════════════════════════════════════════════
+  # JOB 1 — Run tests across 4 parallel shards
+  # ═══════════════════════════════════════════════════
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
 
     steps:
 
-      # ─────────────────────────────────────────
-      # STEP 1 — Checkout your code
-      # ─────────────────────────────────────────
       - name: 📥 Checkout Repository
         uses: actions/checkout@v4
 
-      # ─────────────────────────────────────────
-      # STEP 2 — Set up Node.js
-      # ─────────────────────────────────────────
       - name: 🟢 Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
-      # ─────────────────────────────────────────
-      # STEP 3 — Install project dependencies
-      # ─────────────────────────────────────────
       - name: 📦 Install Dependencies
         run: npm ci
 
-      # ─────────────────────────────────────────
-      # STEP 4 — Install Playwright browsers
-      # ─────────────────────────────────────────
       - name: 🌐 Install Playwright Browsers
         run: npx playwright install --with-deps
 
+      - name: 🧪 Run Playwright Tests (Shard ${{ matrix.shard }}/4)
+        run: npx playwright test --shard=${{ matrix.shard }}/4
+        continue-on-error: true
+        env:
+          CI: true
+
+      - name: 💾 Upload Shard ${{ matrix.shard }} Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results-shard-${{ matrix.shard }}
+          path: allure-results/
+          retention-days: 1
+        if: always()
+
+
+  # ═══════════════════════════════════════════════════
+  # JOB 2 — Merge shards → Allure report → Gmail
+  # Runs only after ALL 4 shards complete
+  # ═══════════════════════════════════════════════════
+  report:
+    runs-on: ubuntu-latest
+    needs: test
+    if: always()
+
+    steps:
+
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
       # ─────────────────────────────────────────
-      # STEP 5 — Install Allure CLI on the runner
+      # Download all 4 shard results
+      # ─────────────────────────────────────────
+      - name: 📥 Download Shard 1 Results
+        uses: actions/download-artifact@v4
+        with:
+          name: allure-results-shard-1
+          path: allure-results/
+        if: always()
+
+      - name: 📥 Download Shard 2 Results
+        uses: actions/download-artifact@v4
+        with:
+          name: allure-results-shard-2
+          path: allure-results/
+        if: always()
+
+      - name: 📥 Download Shard 3 Results
+        uses: actions/download-artifact@v4
+        with:
+          name: allure-results-shard-3
+          path: allure-results/
+        if: always()
+
+      - name: 📥 Download Shard 4 Results
+        uses: actions/download-artifact@v4
+        with:
+          name: allure-results-shard-4
+          path: allure-results/
+        if: always()
+
+      # ─────────────────────────────────────────
+      # Install Allure CLI
       # ─────────────────────────────────────────
       - name: ⚙️ Install Allure CLI
         run: |
@@ -55,22 +111,12 @@ jobs:
           sudo mv allure-2.27.0 /opt/allure
           sudo ln -s /opt/allure/bin/allure /usr/local/bin/allure
           allure --version
+        if: always()
 
       # ─────────────────────────────────────────
-      # STEP 6 — Run Playwright tests
-      # continue-on-error: true → report still
-      # generates even when tests fail
+      # Merge all shard results into one report
       # ─────────────────────────────────────────
-      - name: 🧪 Run Playwright Tests
-        run: npx playwright test
-        continue-on-error: true
-        env:
-          CI: true
-
-      # ─────────────────────────────────────────
-      # STEP 7 — Generate Allure HTML Report
-      # ─────────────────────────────────────────
-      - name: 📊 Generate Allure Report
+      - name: 📊 Generate Allure Report (All Shards Merged)
         run: |
           allure generate allure-results \
             --clean \
@@ -78,10 +124,9 @@ jobs:
         if: always()
 
       # ─────────────────────────────────────────
-      # STEP 8 — Upload report as artifact
-      # (downloadable from GitHub Actions tab)
+      # Upload final merged report as artifact
       # ─────────────────────────────────────────
-      - name: 💾 Upload Report Artifact
+      - name: 💾 Upload Final Report Artifact
         uses: actions/upload-artifact@v4
         with:
           name: allure-report
@@ -90,9 +135,8 @@ jobs:
         if: always()
 
       # ─────────────────────────────────────────
-      # STEP 9 — Deploy to GitHub Pages
-      # Public URL:
-      # https://<username>.github.io/<repo>/allure-report
+      # Deploy to GitHub Pages
+      # URL: https://<username>.github.io/<repo>/allure-report
       # ─────────────────────────────────────────
       - name: 🚀 Deploy Report to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
@@ -103,7 +147,7 @@ jobs:
         if: always()
 
       # ─────────────────────────────────────────
-      # STEP 10 — Send Gmail Notification
+      # Send Gmail via Resend API
       # One-click button opens Allure report
       # ─────────────────────────────────────────
       - name: 📧 Send Gmail Notification
@@ -114,7 +158,7 @@ jobs:
             -d '{
               "from": "GitHub Actions <onboarding@resend.dev>",
               "to": ["gajera.brijesh11@gmail.com"],
-              "subject": "🎭 Playwright Report | ${{ github.repository }} | ${{ github.ref_name }}",
-              "html": "<div style=\"font-family:Arial,sans-serif;max-width:600px;margin:auto;\"><div style=\"background:#1a1a2e;padding:24px 30px;\"><h2 style=\"color:white;margin:0;\">🎭 Playwright Test Report</h2><p style=\"color:#aaa;margin:6px 0 0 0;font-size:13px;\">GitHub Actions — Automated Notification</p></div><div style=\"padding:28px 30px;\"><table style=\"width:100%;border-collapse:collapse;font-size:14px;\"><tr style=\"border-bottom:1px solid #eee;\"><td style=\"padding:10px 0;color:#888;width:35%;\">Repository</td><td style=\"padding:10px 0;font-weight:bold;\">${{ github.repository }}</td></tr><tr style=\"border-bottom:1px solid #eee;\"><td style=\"padding:10px 0;color:#888;\">Branch</td><td style=\"padding:10px 0;font-weight:bold;\">${{ github.ref_name }}</td></tr><tr style=\"border-bottom:1px solid #eee;\"><td style=\"padding:10px 0;color:#888;\">Triggered by</td><td style=\"padding:10px 0;font-weight:bold;\">${{ github.actor }}</td></tr><tr><td style=\"padding:10px 0;color:#888;\">Run</td><td style=\"padding:10px 0;\">#${{ github.run_number }}</td></tr></table><div style=\"text-align:center;margin:36px 0 20px 0;\"><a href=\"https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/allure-report/index.html\" style=\"display:inline-block;background:linear-gradient(135deg,#4CAF50,#2196F3);color:white;padding:16px 40px;text-decoration:none;border-radius:8px;font-size:16px;font-weight:bold;\">📊 Open Allure Report</a><p style=\"font-size:12px;color:#999;margin-top:10px;\">Click to open the full interactive report in your browser</p></div></div><div style=\"background:#f8f9fa;padding:16px 30px;border-top:1px solid #eee;\"><p style=\"font-size:12px;color:#aaa;margin:0;text-align:center;\">Sent by GitHub Actions • ${{ github.repository }}</p></div></div>"
+              "subject": "🎭 Playwright Report | ${{ github.repository }} | ${{ github.ref_name }} | Run #${{ github.run_number }}",
+              "html": "<!DOCTYPE html><html><body style=\"font-family:Arial,sans-serif;background:#f4f4f4;padding:30px;margin:0;\"><div style=\"max-width:600px;margin:auto;background:white;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.1);overflow:hidden;\"><div style=\"background:#1a1a2e;padding:24px 30px;\"><h2 style=\"color:white;margin:0;font-size:20px;\">🎭 Playwright Test Report</h2><p style=\"color:#aaa;margin:6px 0 0 0;font-size:13px;\">GitHub Actions — Automated Notification</p></div><div style=\"padding:28px 30px;\"><table style=\"width:100%;border-collapse:collapse;font-size:14px;color:#333;\"><tr style=\"border-bottom:1px solid #eee;\"><td style=\"padding:10px 0;color:#888;width:35%;\">Repository</td><td style=\"padding:10px 0;font-weight:bold;\">${{ github.repository }}</td></tr><tr style=\"border-bottom:1px solid #eee;\"><td style=\"padding:10px 0;color:#888;\">Branch</td><td style=\"padding:10px 0;font-weight:bold;\">${{ github.ref_name }}</td></tr><tr style=\"border-bottom:1px solid #eee;\"><td style=\"padding:10px 0;color:#888;\">Triggered by</td><td style=\"padding:10px 0;font-weight:bold;\">${{ github.actor }}</td></tr><tr style=\"border-bottom:1px solid #eee;\"><td style=\"padding:10px 0;color:#888;\">Parallel Shards</td><td style=\"padding:10px 0;font-weight:bold;\">4 machines</td></tr><tr><td style=\"padding:10px 0;color:#888;\">Run</td><td style=\"padding:10px 0;\">#${{ github.run_number }}</td></tr></table><div style=\"text-align:center;margin:36px 0 20px 0;\"><a href=\"https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/allure-report/index.html\" style=\"display:inline-block;background:linear-gradient(135deg,#4CAF50,#2196F3);color:white;padding:16px 40px;text-decoration:none;border-radius:8px;font-size:16px;font-weight:bold;letter-spacing:0.5px;box-shadow:0 4px 12px rgba(33,150,243,0.4);\">📊 Open Allure Report</a><p style=\"font-size:12px;color:#999;margin-top:10px;\">Click to open the full interactive report in your browser</p></div><div style=\"background:#f8f9fa;border-radius:6px;padding:12px 16px;\"><p style=\"font-size:12px;color:#666;margin:0;\">Or copy this URL manually:<br/><span style=\"font-family:monospace;color:#333;word-break:break-all;\">https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/allure-report/index.html</span></p></div></div><div style=\"background:#f8f9fa;padding:16px 30px;border-top:1px solid #eee;\"><p style=\"font-size:12px;color:#aaa;margin:0;text-align:center;\">Sent by GitHub Actions • ${{ github.repository }}</p></div></div></body></html>"
             }'
         if: always()
